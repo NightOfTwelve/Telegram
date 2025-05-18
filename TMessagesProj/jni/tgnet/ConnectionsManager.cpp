@@ -934,6 +934,9 @@ void ConnectionsManager::onConnectionDataReceived(Connection *connection, Native
         }
         data->position(mark + 24);
 
+        // TODO
+        data->print("ConnectionsManager::onConnectionDataReceived");
+
         int64_t messageServerSalt = data->readInt64(&error);
         int64_t messageSessionId = data->readInt64(&error);
 
@@ -945,6 +948,8 @@ void ConnectionsManager::onConnectionDataReceived(Connection *connection, Native
         int64_t messageId = data->readInt64(&error);
         int32_t messageSeqNo = data->readInt32(&error);
         uint32_t messageLength = data->readUint32(&error);
+
+        if (LOGS_ENABLED) DEBUG_E("[+] messageServerSalt (0x%" PRIx64 ") messageSessionId (0x%" PRIx64 ") messageId (0x%" PRIx64 ") messageSeqNo:0x%02x messageLength:0x%02x", messageServerSalt, messageSessionId, messageId, messageSeqNo, messageLength);
 
         int32_t processedStatus = connection->isMessageIdProcessed(messageId);
 

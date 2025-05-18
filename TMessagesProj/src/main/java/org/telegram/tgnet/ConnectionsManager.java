@@ -369,7 +369,8 @@ public class ConnectionsManager extends BaseController {
             NativeByteBuffer buffer = new NativeByteBuffer(object.getObjectSize());
             object.serializeToStream(buffer);
             object.freeResources();
-
+            // TODO buffer.print(); object.getClass().getTypeName()   native_sendRequest(currentAccount, buffer.address, flags, datacenterId, connectionType, immediate, requestToken);
+            buffer.print("sendRequestInternal after " + object + " serializeToStream");
 //            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
 //                buffer.print("[+] sendRequestInternal after " + object.getClass().getTypeName() + " serializeToStream");
 //            }
@@ -385,12 +386,14 @@ public class ConnectionsManager extends BaseController {
             }
             long finalStartRequestTime = startRequestTime;
             listen(requestToken, (response, errorCode, errorText, networkType, timestamp, requestMsgId, dcId) -> {
+                FileLog.d(String.format("[+] RequestDelegateInternal onComplete:response:[%d], errorCode:[%d], errorText:[%s], networkType:[%d], timestamp:[%d], requestMsgId:[%d], dcId:[%d]", response, errorCode, errorText, networkType, timestamp, requestMsgId, dcId));
                 try {
                     TLObject resp = null;
                     TLRPC.TL_error error = null;
                     int responseSize = 0;
                     if (response != 0) {
                         NativeByteBuffer buff = NativeByteBuffer.wrap(response);
+                        buff.print("RequestDelegateInternal onComplete");// TODO
                         buff.reused = true;
                         responseSize = buff.limit();
                         int magic = buff.readInt32(true);

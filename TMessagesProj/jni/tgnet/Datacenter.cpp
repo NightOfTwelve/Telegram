@@ -1203,6 +1203,8 @@ NativeByteBuffer *Datacenter::createRequestsData(std::vector<std::unique_ptr<Net
     buffer->writeInt64(authKeyId);
     buffer->position(24);
 
+    buffer->print("Datacenter::createRequestsData 1");
+
     if (pfsInit) {
         int64_t value;
         RAND_bytes((uint8_t *) &value, 8);
@@ -1216,14 +1218,30 @@ NativeByteBuffer *Datacenter::createRequestsData(std::vector<std::unique_ptr<Net
     buffer->writeInt64(messageId);
     buffer->writeInt32(messageSeqNo);
     buffer->writeInt32(messageSize);
+    buffer->print("Datacenter::createRequestsData 2");
     messageBody->serializeToStream(buffer);
     if (freeMessageBody) {
         delete messageBody;
     }
 
+    // TODO
+    buffer->print("Datacenter::createRequestsData 3");
+
     if (additionalSize != 0) {
         RAND_bytes(buffer->bytes() + 24 + 32 + messageSize, additionalSize);
     }
+    buffer->print("Datacenter::createRequestsData 4");
+//    // TODO print buffer
+//    uint8_t *buff = buffer->bytes();
+//    char strBuf[3 * buffer->limit() + 1];
+//    char *ptr = strBuf;
+//    for (int i = 0; i < buffer->limit(); i++) {
+//        sprintf(ptr, "%02X ", buff[i]);
+//        ptr += 3;
+//    }
+//    if (LOGS_ENABLED) DEBUG_D("[+] message:[%s]", strBuf);
+
+
     thread_local static uint8_t messageKey[96];
     switch (mtProtoVersion) {
         case 2: {
@@ -1251,10 +1269,12 @@ NativeByteBuffer *Datacenter::createRequestsData(std::vector<std::unique_ptr<Net
         }
     }
     memcpy(buffer->bytes() + 8, messageKey + 8, 16);
+    buffer->print("Datacenter::createRequestsData 5");
 
     generateMessageKey(instanceNum, authKey->bytes, messageKey + 8, messageKey + 32, false, mtProtoVersion);
     aesIgeEncryption(buffer->bytes() + 24, messageKey + 32, messageKey + 64, true, false, buffer->limit() - 24);
 
+    buffer->print("Datacenter::createRequestsData 6");
     return buffer;
 }
 
