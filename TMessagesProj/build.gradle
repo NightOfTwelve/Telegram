@@ -114,6 +114,11 @@ android {
                 arguments '-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-16'
             }
         }
+
+        ndk {
+            //abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+            abiFilters "arm64-v8a"
+        }
     }
 
     buildTypes {
