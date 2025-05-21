@@ -17,6 +17,13 @@ ${CMAKE_HOME_DIRECTORY}/ffmpeg/${ANDROID_ABI}/libdav1d.a,
 ${CMAKE_HOME_DIRECTORY}/boringssl/lib/libssl_${ANDROID_ABI}.a,
 ${CMAKE_HOME_DIRECTORY}/boringssl/lib/libcrypto_${ANDROID_ABI}.a")
 
+set(CMAKE_BUILD_TYPE Debug)
+add_compile_options(-O0 -fno-inline)
+
+## 使用工具如AddressSanitizer来检测内存泄漏问题。在CMakeLists.txt中启用AddressSanitizer
+#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
+
 if (${ANDROID_ABI} STREQUAL "armeabi-v7a" OR ${ANDROID_ABI} STREQUAL "arm64-v8a")
     enable_language(ASM)
 else()
@@ -197,8 +204,11 @@ add_library(tgnet STATIC
         tgnet/ProxyCheckInfo.cpp
         tgnet/Handshake.cpp
         tgnet/Config.cpp)
+#target_compile_options(tgnet PUBLIC
+#        -Wall -frtti -finline-functions -ffast-math -Os)
 target_compile_options(tgnet PUBLIC
-        -Wall -frtti -finline-functions -ffast-math -Os)
+        -Wall -frtti -ffast-math)
+
 set_target_properties(tgnet PROPERTIES
         ANDROID_ARM_MODE arm)
 target_compile_definitions(tgnet PUBLIC
@@ -378,8 +388,10 @@ add_library(${NATIVE_LIB} SHARED
         secureid_ocr.cpp
 )
 
+#target_compile_options(${NATIVE_LIB} PUBLIC
+#        -ffast-math -Os -funroll-loops -ffast-math -fno-strict-aliasing -fno-math-errno)
 target_compile_options(${NATIVE_LIB} PUBLIC
-        -ffast-math -Os -funroll-loops -ffast-math -fno-strict-aliasing -fno-math-errno)
+        -ffast-math -fno-strict-aliasing -fno-math-errno)
 
 target_compile_definitions(${NATIVE_LIB} PUBLIC
         BSD=1 NULL=0 SOCKLEN_T=socklen_t ANDROID_NDK DISABLE_IMPORTGL AVOID_TABLES ANDROID_TILE_BASED_DECODE __STDC_CONSTANT_MACROS ANDROID_ARMV6_IDCT OPUS_BUILD FIXED_POINT USE_ALLOCA restrict= __EMX__ LOCALE_NOT_USED HAVE_LRINT HAVE_LRINTF)
