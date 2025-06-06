@@ -24,12 +24,13 @@ class ByteArray;
 class TLObject;
 class Config;
 class Handshake;
+class ConnectionsManager;
 
 class Datacenter : public HandshakeDelegate {
 
 public:
-    Datacenter(int32_t instance, uint32_t id);
-    Datacenter(int32_t instance, NativeByteBuffer *data);
+    Datacenter(int32_t instance, uint32_t id, ConnectionsManager *connMgr);
+    Datacenter(int32_t instance, NativeByteBuffer *data, ConnectionsManager *connMgr);
     uint32_t getDatacenterId();
     TcpAddress *getCurrentAddress(uint32_t flags);
     int32_t getCurrentPort(uint32_t flags);
@@ -96,6 +97,8 @@ private:
     uint32_t lastInitVersion = 0;
     uint32_t lastInitMediaVersion = 0;
     bool authorized = false;
+
+    ConnectionsManager *connMgr{nullptr};
 
     std::vector<TcpAddress> addressesIpv4;
     std::vector<TcpAddress> addressesIpv6;

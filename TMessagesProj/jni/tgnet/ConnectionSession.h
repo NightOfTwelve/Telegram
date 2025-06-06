@@ -13,10 +13,12 @@
 #include <vector>
 #include "Defines.h"
 
+class ConnectionsManager;
+
 class ConnectionSession {
 
 public:
-    ConnectionSession(int32_t instance);
+    ConnectionSession(int32_t instance, ConnectionsManager *connMgr);
     void recreateSession();
     void genereateNewSessionId();
     void setSessionId(int64_t id);
@@ -35,6 +37,8 @@ private:
     int64_t sessionId;
     uint32_t nextSeqNo = 0;
     int64_t minProcessedMessageId = 0;
+
+    ConnectionsManager *connMgr{nullptr};
 
     std::vector<int64_t> processedMessageIds;
     std::vector<int64_t> messagesIdsForConfirmation;

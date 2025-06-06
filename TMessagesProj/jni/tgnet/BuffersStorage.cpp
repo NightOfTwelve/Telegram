@@ -86,7 +86,7 @@ void BuffersStorage::reuseFreeBuffer(NativeByteBuffer *buffer) {
     }
     std::vector<NativeByteBuffer *> *arrayToReuse = nullptr;
     uint32_t capacity = buffer->capacity();
-    uint32_t maxCount = 10;
+    uint32_t maxCount = 10;// TODO control buffer count  2M buffer ???
     if (capacity == 8) {
         arrayToReuse = &freeBuffers8;
         maxCount = 80;

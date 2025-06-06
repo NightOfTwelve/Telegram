@@ -30,6 +30,7 @@ private:
 };
 
 extern bool LOGS_ENABLED;
+extern uint8_t LOG_LEVEL;
 
 #define DEBUG_FATAL FileLog::getInstance().fatal
 #define DEBUG_E FileLog::getInstance().e

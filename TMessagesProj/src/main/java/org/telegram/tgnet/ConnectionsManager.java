@@ -792,6 +792,7 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void onUnparsedMessageReceived(long address, final int currentAccount, long messageId) {
+        FileLog.d(String.format("[+] ConnectionsManager::onUnparsedMessageReceived address:[%d] currentAccount:[%d] messageId:[%d]", address, currentAccount, messageId));
         try {
             NativeByteBuffer buff = NativeByteBuffer.wrap(address);
             buff.reused = true;
@@ -815,14 +816,17 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void onUpdate(final int currentAccount) {
+        FileLog.d(String.format("[+] ConnectionsManager::onUpdate currentAccount:[%d]", currentAccount));
         Utilities.stageQueue.postRunnable(() -> AccountInstance.getInstance(currentAccount).getMessagesController().updateTimerProc());
     }
 
     public static void onSessionCreated(final int currentAccount) {
+        FileLog.d(String.format("[+] ConnectionsManager::onSessionCreated currentAccount:[%d]", currentAccount));
         Utilities.stageQueue.postRunnable(() -> AccountInstance.getInstance(currentAccount).getMessagesController().getDifference());
     }
 
     public static void onConnectionStateChanged(final int state, final int currentAccount) {
+        FileLog.d(String.format("[+] ConnectionsManager::onConnectionStateChanged state:[%d] currentAccount:[%d]", state, currentAccount));
         AndroidUtilities.runOnUIThread(() -> {
             getInstance(currentAccount).connectionState = state;
             AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.didUpdateConnectionState);
@@ -860,6 +864,7 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void onRequestNewServerIpAndPort(final int second, final int currentAccount) {
+        FileLog.d(String.format("[+] ConnectionsManager::onRequestNewServerIpAndPort second:[%d] currentAccount:[%d]", second, currentAccount));
         Utilities.globalQueue.postRunnable(() -> {
             boolean networkOnline = ApplicationLoader.isNetworkOnline();
             Utilities.stageQueue.postRunnable(() -> {
@@ -936,6 +941,7 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void onUpdateConfig(long address, final int currentAccount) {
+        FileLog.d(String.format("[+] ConnectionsManager::onUpdateConfig address:[%d] currentAccount:[%d]", address, currentAccount));
         try {
             NativeByteBuffer buff = NativeByteBuffer.wrap(address);
             buff.reused = true;
@@ -1542,6 +1548,7 @@ public class ConnectionsManager extends BaseController {
     public static long lastPremiumFloodWaitShown = 0;
     @Keep
     public static void onPremiumFloodWait(final int currentAccount, final int requestToken, boolean isUpload) {
+        FileLog.d(String.format("[+] ConnectionsManager::onPremiumFloodWait currentAccount:[%d] requestToken:[%d] isUpload:[%b]", currentAccount, requestToken, isUpload));
         AndroidUtilities.runOnUIThread(() -> {
             if (UserConfig.selectedAccount != currentAccount) {
                 return;

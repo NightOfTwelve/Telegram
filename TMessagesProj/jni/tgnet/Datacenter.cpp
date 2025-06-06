@@ -29,9 +29,9 @@
 
 thread_local static SHA256_CTX sha256Ctx;
 
-Datacenter::Datacenter(int32_t instance, uint32_t id) {
-    instanceNum = instance;
-    datacenterId = id;
+Datacenter::Datacenter(int32_t instance, uint32_t id, ConnectionsManager *connMgr) : instanceNum(instance), datacenterId(id), connMgr(connMgr) {
+//    instanceNum = instance;
+//    datacenterId = id;
     for (auto & a : uploadConnection) {
         a = nullptr;
     }
@@ -43,8 +43,8 @@ Datacenter::Datacenter(int32_t instance, uint32_t id) {
     }
 }
 
-Datacenter::Datacenter(int32_t instance, NativeByteBuffer *data) {
-    instanceNum = instance;
+Datacenter::Datacenter(int32_t instance, NativeByteBuffer *data, ConnectionsManager *connMgr) : instanceNum(instance), connMgr(connMgr) {
+    //instanceNum = instance;
     for (auto & a : uploadConnection) {
         a = nullptr;
     }

@@ -64,6 +64,7 @@ NativeByteBuffer::~NativeByteBuffer() {
 #ifdef ANDROID
     if (javaByteBuffer != nullptr) {
         JNIEnv *env = 0;
+        //JNI_EDETACHED -2 JNI_EVERSION -3 JNI_OK 0
         if (javaVm->GetEnv((void **) &env, JNI_VERSION_1_6) != JNI_OK) {
 		    if (LOGS_ENABLED) DEBUG_E("can't get jnienv");
             exit(1);

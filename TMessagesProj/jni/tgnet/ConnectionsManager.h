@@ -42,6 +42,9 @@ public:
     ConnectionsManager(int32_t instance);
     ~ConnectionsManager();
 
+    static std::map<uint64_t, std::unique_ptr<ConnectionsManager>> connMgrs;
+    static void removeInstance(int32_t instanceNum);
+
     static ConnectionsManager &getInstance(int32_t instanceNum);
     int64_t getCurrentTimeMillis();
     int64_t getCurrentTimeMonotonicMillis();
@@ -140,7 +143,8 @@ private:
 
     std::list<EventObject *> events;
 
-    std::map<uint32_t, Datacenter *> datacenters;
+    //std::map<uint32_t, Datacenter *> datacenters;
+    std::map<uint32_t, std::unique_ptr<Datacenter>> datacenters;// TODO
     std::map<int32_t, std::vector<std::int32_t>> quickAckIdToRequestIds;
     int32_t pingTime;
     int64_t pingTimeMs;
@@ -211,6 +215,9 @@ private:
     int eventFd;
     int *pipeFd = nullptr;
     NativeByteBuffer *networkBuffer;
+
+    EventObject* eventFdEventObject = nullptr;
+    EventObject* pipeEventObject = nullptr;
 
     requestsList waitingLoginRequests;
     requestsList requestsQueue;

@@ -402,11 +402,12 @@ private:
     }
 };
 
-ConnectionSocket::ConnectionSocket(int32_t instance) {
-    instanceNum = instance;
+ConnectionSocket::ConnectionSocket(int32_t instance, ConnectionsManager *connMgr) : instanceNum(instance), eventObject(nullptr), connMgr(connMgr) {
+    //instanceNum = instance;
     outgoingByteStream = new ByteStream();
-    lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
-    eventObject = new EventObject(this, EventObjectTypeConnection);
+    //lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+    lastEventTime = connMgr->getCurrentTimeMonotonicMillis();
+    eventObject = new EventObject(this, EventObjectTypeConnection);// TODO  std::make_unique<EventObject>(this, EventObjectTypeConnection);
 }
 
 ConnectionSocket::~ConnectionSocket() {
@@ -426,6 +427,11 @@ ConnectionSocket::~ConnectionSocket() {
         tlsBuffer->reuse();
         tlsBuffer = nullptr;
     }
+
+    if (-1 != socketFd) {
+        close(socketFd);
+        socketFd = -1;
+    }
 }
 
 void ConnectionSocket::openConnection(std::string address, uint16_t port, std::string secret, bool ipv6, int32_t networkType) {
@@ -436,7 +442,8 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     waitingForHostResolve = "";
     adjustWriteOpAfterResolve = false;
     tlsState = 0;
-    ConnectionsManager::getInstance(instanceNum).attachConnection(this);
+    //ConnectionsManager::getInstance(instanceNum).attachConnection(this);
+    connMgr->attachConnection(this);
 
     memset(&socketAddress, 0, sizeof(sockaddr_in));
     memset(&socketAddress6, 0, sizeof(sockaddr_in6));
@@ -445,9 +452,13 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     std::string *proxySecret = &overrideProxySecret;
     uint16_t proxyPort = overrideProxyPort;
     if (proxyAddress->empty()) {
-        proxyAddress = &ConnectionsManager::getInstance(instanceNum).proxyAddress;
-        proxyPort = ConnectionsManager::getInstance(instanceNum).proxyPort;
-        proxySecret = &ConnectionsManager::getInstance(instanceNum).proxySecret;
+//        proxyAddress = &ConnectionsManager::getInstance(instanceNum).proxyAddress;
+//        proxyPort = ConnectionsManager::getInstance(instanceNum).proxyPort;
+//        proxySecret = &ConnectionsManager::getInstance(instanceNum).proxySecret;
+
+        proxyAddress = &(connMgr->proxyAddress);
+        proxyPort = connMgr->proxyPort;
+        proxySecret = &(connMgr->proxySecret);
     }
 
     if (!proxyAddress->empty()) {
@@ -457,6 +468,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             closeSocket(1, -1);
             return;
         }
+        if (LOGS_ENABLED) DEBUG_D("[+] create socket(%d) object(%p) instanceNum:[%lu] proxy %s:%d secret[%d]", socketFd, this, instanceNum, proxyAddress->c_str(), proxyPort, (int) proxySecret->size());
         uint32_t tempBuffLength;
         if (proxySecret->empty()) {
             proxyAuthState = 1;
@@ -499,7 +511,8 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             if (continueCheckAddress) {
 #ifdef USE_DELEGATE_HOST_RESOLVE
                 waitingForHostResolve = *proxyAddress;
-                ConnectionsManager::getInstance(instanceNum).delegate->getHostByName(*proxyAddress, instanceNum, this);
+                //ConnectionsManager::getInstance(instanceNum).delegate->getHostByName(*proxyAddress, instanceNum, this);
+                connMgr->delegate->getHostByName(*proxyAddress, instanceNum, this);
                 return;
 #else
                 struct hostent *he;
@@ -528,6 +541,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             closeSocket(1, -1);
             return;
         }
+        if (LOGS_ENABLED) DEBUG_D("[+] create socket(%d) object(%p) instanceNum:[%lu] without proxy", socketFd, this, instanceNum);
         if (ipv6) {
             socketAddress6.sin6_family = AF_INET6;
             socketAddress6.sin6_port = htons(port);
@@ -569,7 +583,8 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
 }
 
 void ConnectionSocket::openConnectionInternal(bool ipv6) {
-    int epolFd = ConnectionsManager::getInstance(instanceNum).epolFd;
+    //int epolFd = ConnectionsManager::getInstance(instanceNum).epolFd;
+    int epolFd = connMgr->epolFd;
     int yes = 1;
     if (setsockopt(socketFd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(int))) {
         if (LOGS_ENABLED) DEBUG_E("connection(%p) set TCP_NODELAY failed", this);
@@ -584,6 +599,17 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
     }
 #endif
 
+    // TODO
+    int keepAlive = 1;
+    if (setsockopt(socketFd, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(int))) {
+        if (LOGS_ENABLED) DEBUG_E("[+] connection(%p) set SO_KEEPALIVE failed", this);
+    }
+    int interval = 3;
+    if (setsockopt(socketFd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(int))) {
+        if (LOGS_ENABLED) DEBUG_E("[+] connection(%p) set TCP_KEEPINTVL failed", this);
+    }
+
+
     if (fcntl(socketFd, F_SETFL, O_NONBLOCK) == -1) {
         if (LOGS_ENABLED) DEBUG_E("connection(%p) set O_NONBLOCK failed", this);
         closeSocket(1, -1);
@@ -593,6 +619,7 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
     if (connect(socketFd, (ipv6 ? (sockaddr *) &socketAddress6 : (sockaddr *) &socketAddress), (socklen_t) (ipv6 ? sizeof(sockaddr_in6) : sizeof(sockaddr_in))) == -1 && errno != EINPROGRESS) {
         closeSocket(1, -1);
     } else {
+        if (LOGS_ENABLED) DEBUG_D("[+] ConnectionSocket::openConnectionInternal (%p) after socket(%d) connect", this, socketFd);
         eventMask.events = EPOLLOUT | EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
         eventMask.data.ptr = eventObject;
         if (epoll_ctl(epolFd, EPOLL_CTL_ADD, socketFd, &eventMask) != 0) {
@@ -621,15 +648,20 @@ int32_t ConnectionSocket::checkSocketError(int32_t *error) {
 }
 
 void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
-    lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
-    ConnectionsManager::getInstance(instanceNum).detachConnection(this);
+    //lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+    lastEventTime = connMgr->getCurrentTimeMonotonicMillis();
+    //ConnectionsManager::getInstance(instanceNum).detachConnection(this);
+    connMgr->detachConnection(this);
     if (LOGS_ENABLED) DEBUG_D("[+] ConnectionSocket::closeSocket object:[%p] socketFd:[%d] instanceNum:[%lu] reason:[%d] error:[%d]", this, socketFd, instanceNum, reason, error);
     if (socketFd >= 0) {
-        epoll_ctl(ConnectionsManager::getInstance(instanceNum).epolFd, EPOLL_CTL_DEL, socketFd, nullptr);
+        //epoll_ctl(ConnectionsManager::getInstance(instanceNum).epolFd, EPOLL_CTL_DEL, socketFd, nullptr);
+        epoll_ctl(connMgr->epolFd, EPOLL_CTL_DEL, socketFd, nullptr);
+        shutdown(socketFd, SHUT_RDWR);// TODO
         if (close(socketFd) != 0) {
             if (LOGS_ENABLED) DEBUG_E("connection(%p) unable to close socket", this);
         }
         socketFd = -1;
+        if (LOGS_ENABLED) DEBUG_D("[+] ConnectionSocket::closeSocket closed object:[%p] instanceNum:[%lu] reason:[%d] error:[%d]", this, instanceNum, reason, error);
     }
     waitingForHostResolve = "";
     adjustWriteOpAfterResolve = false;
@@ -652,7 +684,8 @@ void ConnectionSocket::onEvent(uint32_t events) {
             return;
         } else {
             ssize_t readCount;
-            NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
+            //NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
+            NativeByteBuffer *buffer = connMgr->networkBuffer;
             while (true) {
                 buffer->rewind();
                 readCount = recv(socketFd, buffer->bytes(), READ_BUFFER_SIZE, 0);
@@ -668,7 +701,8 @@ void ConnectionSocket::onEvent(uint32_t events) {
                 }
                 if (readCount > 0) {
                     buffer->limit((uint32_t) readCount);
-                    lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+                    //lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+                    lastEventTime = connMgr->getCurrentTimeMonotonicMillis();
                     if (proxyAuthState == 11) {
                         if (LOGS_ENABLED) DEBUG_D("connection(%p) TLS received %d", this, (int) readCount);
                         size_t newBytesRead = bytesRead + readCount;
@@ -784,8 +818,11 @@ void ConnectionSocket::onEvent(uint32_t events) {
                             if (LOGS_ENABLED) DEBUG_E("connection(%p) invalid proxy response on state 6", this);
                         }
                     } else if (proxyAuthState == 0) {
-                        if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
-                            ConnectionsManager::getInstance(instanceNum).delegate->onBytesReceived((int32_t) readCount, currentNetworkType, instanceNum);
+//                        if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
+//                            ConnectionsManager::getInstance(instanceNum).delegate->onBytesReceived((int32_t) readCount, currentNetworkType, instanceNum);
+//                        }
+                        if (connMgr->delegate != nullptr) {
+                            connMgr->delegate->onBytesReceived((int32_t) readCount, currentNetworkType, instanceNum);
                         }
                         if (tlsState != 0) {
                             while (buffer->hasRemaining()) {
@@ -874,7 +911,8 @@ void ConnectionSocket::onEvent(uint32_t events) {
             if (proxyAuthState != 0) {
                 if (proxyAuthState >= 10) {
                     if (proxyAuthState == 10) {
-                        lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+                        //lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+                        lastEventTime = connMgr->getCurrentTimeMonotonicMillis();
                         tlsHashMismatch = false;
                         proxyAuthState = 11;
                         TlsHello hello = TlsHello::getDefault();
@@ -888,7 +926,8 @@ void ConnectionSocket::onEvent(uint32_t events) {
                         uint32_t outLength;
                         HMAC(EVP_sha256(), currentSecret.data(), currentSecret.size(), tempBuffer->bytes, size, tempBuffer->bytes + 64 * 1024, &outLength);
 
-                        int32_t currentTime = ConnectionsManager::getInstance(instanceNum).getCurrentTime();
+//                        int32_t currentTime = ConnectionsManager::getInstance(instanceNum).getCurrentTime();
+                        int32_t currentTime = connMgr->getCurrentTime();
                         int32_t old = ((int32_t *) (tempBuffer->bytes + 64 * 1024 + 28))[0];
                         ((int32_t *) (tempBuffer->bytes + 64 * 1024 + 28))[0] = old ^ currentTime;
 
@@ -904,7 +943,8 @@ void ConnectionSocket::onEvent(uint32_t events) {
                     }
                 } else {
                     if (proxyAuthState == 1) {
-                        lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+                        //lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+                        lastEventTime = connMgr->getCurrentTimeMonotonicMillis();
                         proxyAuthState = 2;
                         tempBuffer->bytes[0] = 0x05;
                         tempBuffer->bytes[1] = 0x02;
@@ -924,8 +964,11 @@ void ConnectionSocket::onEvent(uint32_t events) {
                             proxyUser = &overrideProxyUser;
                             proxyPassword = &overrideProxyPassword;
                         } else {
-                            proxyUser = &ConnectionsManager::getInstance(instanceNum).proxyUser;
-                            proxyPassword = &ConnectionsManager::getInstance(instanceNum).proxyPassword;
+//                            proxyUser = &ConnectionsManager::getInstance(instanceNum).proxyUser;
+//                            proxyPassword = &ConnectionsManager::getInstance(instanceNum).proxyPassword;
+
+                            proxyUser = &(connMgr->proxyUser);
+                            proxyPassword = &(connMgr->proxyPassword);
                         }
                         uint8_t len1 = (uint8_t) proxyUser->length();
                         uint8_t len2 = (uint8_t) proxyPassword->length();
@@ -959,12 +1002,14 @@ void ConnectionSocket::onEvent(uint32_t events) {
                 }
             } else {
                 if (!onConnectedSent) {
-                    lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+                    //lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+                    lastEventTime = connMgr->getCurrentTimeMonotonicMillis();
                     if (LOGS_ENABLED) DEBUG_D("connection(%p) reset last event time, on connect", this);
                     onConnected();
                     onConnectedSent = true;
                 }
-                NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
+                //NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
+                NativeByteBuffer *buffer = connMgr->networkBuffer;
                 buffer->clear();
                 outgoingByteStream->get(buffer);
                 buffer->flip();
@@ -998,8 +1043,11 @@ void ConnectionSocket::onEvent(uint32_t events) {
                             closeSocket(1, -1);
                             return;
                         } else {
-                            if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
-                                ConnectionsManager::getInstance(instanceNum).delegate->onBytesSent((int32_t) sentLength, currentNetworkType, instanceNum);
+//                            if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
+//                                ConnectionsManager::getInstance(instanceNum).delegate->onBytesSent((int32_t) sentLength, currentNetworkType, instanceNum);
+//                            }
+                            if (connMgr->delegate != nullptr) {
+                                connMgr->delegate->onBytesSent((int32_t) sentLength, currentNetworkType, instanceNum);
                             }
                             outgoingByteStream->discard((uint32_t) (sentLength - headersSize));
                             adjustWriteOp();
@@ -1010,8 +1058,11 @@ void ConnectionSocket::onEvent(uint32_t events) {
                             closeSocket(1, -1);
                             return;
                         } else {
-                            if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
-                                ConnectionsManager::getInstance(instanceNum).delegate->onBytesSent((int32_t) sentLength, currentNetworkType, instanceNum);
+//                            if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
+//                                ConnectionsManager::getInstance(instanceNum).delegate->onBytesSent((int32_t) sentLength, currentNetworkType, instanceNum);
+//                            }
+                            if (connMgr->delegate != nullptr) {
+                                connMgr->delegate->onBytesSent((int32_t) sentLength, currentNetworkType, instanceNum);
                             }
                             outgoingByteStream->discard((uint32_t) sentLength);
                             adjustWriteOp();
@@ -1058,7 +1109,8 @@ void ConnectionSocket::adjustWriteOp() {
         eventMask.events |= EPOLLOUT;
     }
     eventMask.data.ptr = eventObject;
-    if (epoll_ctl(ConnectionsManager::getInstance(instanceNum).epolFd, EPOLL_CTL_MOD, socketFd, &eventMask) != 0) {
+    //if (epoll_ctl(ConnectionsManager::getInstance(instanceNum).epolFd, EPOLL_CTL_MOD, socketFd, &eventMask) != 0) {
+    if (epoll_ctl(connMgr->epolFd, EPOLL_CTL_MOD, socketFd, &eventMask) != 0) {
         if (LOGS_ENABLED) DEBUG_E("connection(%p) epoll_ctl, modify socket failed", this);
         closeSocket(1, -1);
     }
@@ -1066,7 +1118,8 @@ void ConnectionSocket::adjustWriteOp() {
 
 void ConnectionSocket::setTimeout(time_t time) {
     timeout = time;
-    lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+    //lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+    lastEventTime = connMgr->getCurrentTimeMonotonicMillis();
     if (LOGS_ENABLED) DEBUG_D("connection(%p) set current timeout = %lld", this, (long long) timeout);
 }
 
@@ -1080,7 +1133,8 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
             closeSocket(2, 0);
             return true;
         } else {
-            lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+            //lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+            lastEventTime = connMgr->getCurrentTimeMonotonicMillis();
             if (LOGS_ENABLED) DEBUG_D("connection(%p) reset last event time, no requests", this);
         }
     }
@@ -1092,7 +1146,8 @@ bool ConnectionSocket::hasTlsHashMismatch() {
 }
 
 void ConnectionSocket::resetLastEventTime() {
-    lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+    //lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+    lastEventTime = connMgr->getCurrentTimeMonotonicMillis();
 }
 
 bool ConnectionSocket::isDisconnected() {
@@ -1112,7 +1167,8 @@ void ConnectionSocket::setOverrideProxy(std::string address, uint16_t port, std:
 }
 
 void ConnectionSocket::onHostNameResolved(std::string host, std::string ip, bool ipv6) {
-    ConnectionsManager::getInstance(instanceNum).scheduleTask([&, host, ip, ipv6] {
+    //ConnectionsManager::getInstance(instanceNum).scheduleTask([&, host, ip, ipv6] {
+    connMgr->scheduleTask([&, host, ip, ipv6] {
         if (waitingForHostResolve == host) {
             waitingForHostResolve = "";
             if (ip.empty() || inet_pton(AF_INET, ip.c_str(), &socketAddress.sin_addr.s_addr) != 1) {

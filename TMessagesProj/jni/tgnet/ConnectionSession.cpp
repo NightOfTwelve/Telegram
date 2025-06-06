@@ -13,7 +13,7 @@
 #include "ConnectionsManager.h"
 #include "NativeByteBuffer.h"
 
-ConnectionSession::ConnectionSession(int32_t instance) {
+ConnectionSession::ConnectionSession(int32_t instance, ConnectionsManager *connMgr) : instanceNum(instance), sessionId(-1), connMgr(connMgr) {
     instanceNum = instance;
 }
 
@@ -95,7 +95,8 @@ NetworkMessage *ConnectionSession::generateConfirmationRequest() {
         msgAck->serializeToStream(os);
         networkMessage = new NetworkMessage();
         networkMessage->message = std::unique_ptr<TL_message>(new TL_message);
-        networkMessage->message->msg_id = ConnectionsManager::getInstance(instanceNum).generateMessageId();
+        //networkMessage->message->msg_id = ConnectionsManager::getInstance(instanceNum).generateMessageId();
+        networkMessage->message->msg_id = connMgr->generateMessageId();
         networkMessage->message->seqno = generateMessageSeqNo(false);
         networkMessage->message->bytes = os->capacity();
         networkMessage->message->body = std::unique_ptr<TLObject>(msgAck);

@@ -22,10 +22,10 @@
 
 thread_local static uint32_t lastConnectionToken = 1;
 
-Connection::Connection(Datacenter *datacenter, ConnectionType type, int8_t num) : ConnectionSession(datacenter->instanceNum), ConnectionSocket(datacenter->instanceNum) {
-    currentDatacenter = datacenter;
-    connectionNum = num;
-    connectionType = type;
+Connection::Connection(Datacenter *datacenter, ConnectionType type, int8_t num) : ConnectionSession(datacenter->instanceNum, datacenter->getDatacenterId(), datacenter->connMgr), ConnectionSocket(datacenter->instanceNum, datacenter->connMgr), currentDatacenter(datacenter), connectionType(type), connectionNum(num), reconnectTimer(nullptr) {
+//    currentDatacenter = datacenter;// TODO
+//    connectionNum = num;
+//    connectionType = type;
     genereateNewSessionId();
     connectionState = TcpConnectionStageIdle;
     reconnectTimer = new Timer(datacenter->instanceNum, [&] {
@@ -40,6 +40,14 @@ Connection::~Connection() {
         reconnectTimer->stop();
         delete reconnectTimer;
         reconnectTimer = nullptr;
+    }
+
+    // currentDatacenter
+
+    // restOfTheData
+    if (restOfTheData != nullptr) {
+        restOfTheData->reuse();
+        restOfTheData = nullptr;
     }
 }
 

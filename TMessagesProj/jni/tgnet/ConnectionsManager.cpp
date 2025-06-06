@@ -37,14 +37,17 @@
 #ifdef ANDROID
 #include <jni.h>
 JavaVM *javaVm = nullptr;
-JNIEnv *jniEnv[MAX_ACCOUNT_COUNT];
+JNIEnv *jniEnv[MAX_ACCOUNT_COUNT];// TODO not use this global JNIEnv array ??????
 jclass jclass_ByteBuffer = nullptr;
 jmethodID jclass_ByteBuffer_allocateDirect = nullptr;
 #endif
 
 static bool done = false;
 
-ConnectionsManager::ConnectionsManager(int32_t instance) {
+static std::mutex mgrsMutex;
+std::map<uint64_t, std::unique_ptr<ConnectionsManager>> ConnectionsManager::connMgrs;
+
+ConnectionsManager::ConnectionsManager(int32_t instance) : eventFd(-1), epolFd(-1), epollEvents(nullptr), pipeFd(nullptr) {
     instanceNum = instance;
     if ((epolFd = epoll_create(128)) == -1) {
         if (LOGS_ENABLED) DEBUG_E("unable to create epoll instance");
@@ -68,7 +71,9 @@ ConnectionsManager::ConnectionsManager(int32_t instance) {
     eventFd = eventfd(0, EFD_NONBLOCK);
     if (eventFd != -1) {
         struct epoll_event event = {0};
-        event.data.ptr = new EventObject(&eventFd, EventObjectTypeEvent);
+        eventFdEventObject = new EventObject(&eventFd, EventObjectTypeEvent);
+        event.data.ptr = eventFdEventObject;
+//        event.data.ptr = new EventObject(&eventFd, EventObjectTypeEvent);
         event.events = EPOLLIN | EPOLLET;
         if (epoll_ctl(epolFd, EPOLL_CTL_ADD, eventFd, &event) == -1) {
             eventFd = -1;
@@ -102,11 +107,13 @@ ConnectionsManager::ConnectionsManager(int32_t instance) {
             exit(1);
         }
 
-        auto eventObject = new EventObject(pipeFd, EventObjectTypePipe);
+        //auto eventObject = new EventObject(pipeFd, EventObjectTypePipe);
+        pipeEventObject = new EventObject(pipeFd, EventObjectTypePipe);
 
         epoll_event eventMask = {};
         eventMask.events = EPOLLIN;
-        eventMask.data.ptr = eventObject;
+        //eventMask.data.ptr = eventObject;
+        eventMask.data.ptr = pipeEventObject;
         if (epoll_ctl(epolFd, EPOLL_CTL_ADD, pipeFd[0], &eventMask) != 0) {
             if (LOGS_ENABLED) DEBUG_E("can't add pipe to epoll");
             exit(1);
@@ -114,7 +121,7 @@ ConnectionsManager::ConnectionsManager(int32_t instance) {
     }
 
     sizeCalculator = new NativeByteBuffer(true);
-    networkBuffer = new NativeByteBuffer((uint32_t) READ_BUFFER_SIZE);
+    networkBuffer = new NativeByteBuffer((uint32_t) READ_BUFFER_SIZE);// TODO too large to use BufferStorage NativeByteBuffer *buffer = BuffersStorage::getInstance().getFreeBuffer(length);
     if (networkBuffer == nullptr) {
         if (LOGS_ENABLED) DEBUG_E("unable to allocate read buffer");
         exit(1);
@@ -124,7 +131,25 @@ ConnectionsManager::ConnectionsManager(int32_t instance) {
 }
 
 ConnectionsManager::~ConnectionsManager() {
-    if (epolFd != 0) {
+
+    if (eventFdEventObject != nullptr) {
+        epoll_ctl(epolFd, EPOLL_CTL_DEL, eventFd, nullptr);
+        delete eventFdEventObject;
+        eventFdEventObject = nullptr;
+    }
+
+    if (pipeEventObject != nullptr) {
+        epoll_ctl(epolFd, EPOLL_CTL_DEL, pipeFd[0], nullptr);
+        delete pipeEventObject;
+        pipeEventObject = nullptr;
+    }
+
+    if (-1 != eventFd) {
+        close(eventFd);
+        eventFd = -1;
+    }
+
+    if (epolFd != -1) {
         close(epolFd);
         epolFd = 0;
     }
@@ -135,25 +160,37 @@ ConnectionsManager::~ConnectionsManager() {
     pthread_mutex_destroy(&mutex);
 }
 
+//ConnectionsManager& ConnectionsManager::getInstance(int32_t instanceNum) {
+//    switch (instanceNum) {
+//        case 0:
+//            static ConnectionsManager instance0(0);
+//            return instance0;
+//        case 1:
+//            static ConnectionsManager instance1(1);
+//            return instance1;
+//        case 2:
+//            static ConnectionsManager instance2(2);
+//            return instance2;
+//        case 3:
+//            static ConnectionsManager instance3(3);
+//            return instance3;
+//        case 4:
+//        default:
+//            static ConnectionsManager instance4(4);
+//            return instance4;
+//    }
+//}
+
 ConnectionsManager& ConnectionsManager::getInstance(int32_t instanceNum) {
-    switch (instanceNum) {
-        case 0:
-            static ConnectionsManager instance0(0);
-            return instance0;
-        case 1:
-            static ConnectionsManager instance1(1);
-            return instance1;
-        case 2:
-            static ConnectionsManager instance2(2);
-            return instance2;
-        case 3:
-            static ConnectionsManager instance3(3);
-            return instance3;
-        case 4:
-        default:
-            static ConnectionsManager instance4(4);
-            return instance4;
+    std::lock_guard<std::mutex> lock(mgrsMutex);
+    auto it = connMgrs.find(instanceNum);
+    if (it != connMgrs.end()) {
+        return *it->second;
     }
+
+    auto mgr = std::make_unique<ConnectionsManager>(instanceNum);
+    auto [iter, success] = connMgrs.emplace(instanceNum, std::move(mgr));
+    return *iter->second;
 }
 
 int ConnectionsManager::callEvents(int64_t now) {
@@ -265,7 +302,7 @@ void ConnectionsManager::select() {
             if (!networkPaused) {
                 if (LOGS_ENABLED) DEBUG_D("pausing network and timers by sleep time = %d", nextSleepTimeout);
                 for (auto & dc : datacenters) {
-                    dc.second->suspendConnections(false);
+                    dc.second.get()->suspendConnections(false);
                 }
             }
             networkPaused = true;
@@ -278,10 +315,10 @@ void ConnectionsManager::select() {
     if (networkPaused) {
         networkPaused = false;
         for (auto & dc : datacenters) {
-            if (dc.second->isHandshaking(false)) {
-                dc.second->createGenericConnection()->connect();
-            } else if (dc.second->isHandshaking(true)) {
-                dc.second->createGenericMediaConnection()->connect();
+            if (dc.second.get()->isHandshaking(false)) {
+                dc.second.get()->createGenericConnection()->connect();
+            } else if (dc.second.get()->isHandshaking(true)) {
+                dc.second.get()->createGenericMediaConnection()->connect();
             }
         }
         if (LOGS_ENABLED) DEBUG_D("resume network and timers");
@@ -402,8 +439,12 @@ void ConnectionsManager::loadConfig() {
 
                 count = buffer->readUint32(nullptr);
                 for (uint32_t a = 0; a < count; a++) {
-                    auto datacenter = new Datacenter(instanceNum, buffer);
-                    datacenters[datacenter->getDatacenterId()] = datacenter;
+                    auto dc = std::make_unique<Datacenter>(instanceNum, buffer);
+                    auto datacenter = dc.get();
+                    int dcId = datacenter->getDatacenterId();
+                    //auto datacenter = new Datacenter(instanceNum, buffer);
+                    //datacenters[datacenter->getDatacenterId()] = datacenter;
+                    datacenters.emplace(dcId, std::move(dc));
                     if (LOGS_ENABLED) DEBUG_D("datacenter(%p) %u loaded (hasAuthKey = %d, 0x%" PRIx64 ")", datacenter, datacenter->getDatacenterId(), (int) datacenter->hasPermanentAuthKey(), datacenter->getPermanentAuthKeyId());
                     if (datacenter->isCdnDatacenter && !datacenter->hasPermanentAuthKey()) {
                         datacenter->clearAuthKey(HandshakeTypePerm);
@@ -470,7 +511,7 @@ void ConnectionsManager::saveConfigInternal(NativeByteBuffer *buffer) {
         count = (uint32_t) datacenters.size();
         buffer->writeInt32(count);
         for (auto & datacenter : datacenters) {
-            datacenter.second->serializeToStream(buffer);
+            datacenter.second.get()->serializeToStream(buffer);
         }
     }
 }
@@ -661,14 +702,14 @@ void ConnectionsManager::cleanUp(bool resetKeys, int32_t datacenterId) {
         quickAckIdToRequestIds.clear();
 
         for (auto & datacenter : datacenters) {
-            if (datacenterId != -1 && datacenter.second->getDatacenterId() != datacenterId) {
+            if (datacenterId != -1 && datacenter.second.get()->getDatacenterId() != datacenterId) {
                 continue;
             }
             if (resetKeys) {
-                datacenter.second->clearAuthKey(HandshakeTypeAll);
+                datacenter.second.get()->clearAuthKey(HandshakeTypeAll);
             }
-            datacenter.second->recreateSessions(HandshakeTypeAll);
-            datacenter.second->authorized = false;
+            datacenter.second.get()->recreateSessions(HandshakeTypeAll);
+            datacenter.second.get()->authorized = false;
         }
         if (datacenterId == -1) {
             sessionsToDestroy.clear();
@@ -1800,60 +1841,87 @@ void ConnectionsManager::initDatacenters() {
     Datacenter *datacenter;
     if (!testBackend) {
         if (datacenters.find(1) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 1);
+            auto dc = std::make_unique<Datacenter>(instanceNum, 1);
+            datacenter = dc.get();
+            //datacenter = new Datacenter(instanceNum, 1);
             datacenter->addAddressAndPort("149.154.175.50", 443, 0, "");
             datacenter->addAddressAndPort("2001:b28:f23d:f001:0000:0000:0000:000a", 443, 1, "");
-            datacenters[1] = datacenter;
+            //datacenters[1] = datacenter;
+            //datacenters.emplace(std::make_pair(1, std::move(dc)));
+            datacenters.emplace(1, std::move(dc));
+            //datacenters.insert(1, std::move(dc));
+            //datacenters.insert(std::make_pair(1, std::move(dc)));
         }
 
         if (datacenters.find(2) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 2);
+            auto dc = std::make_unique<Datacenter>(instanceNum, 2);
+            datacenter = dc.get();
+            //datacenter = new Datacenter(instanceNum, 2);
             datacenter->addAddressAndPort("149.154.167.51", 443, 0, "");
             datacenter->addAddressAndPort("95.161.76.100", 443, 0, "");
             datacenter->addAddressAndPort("2001:67c:4e8:f002:0000:0000:0000:000a", 443, 1, "");
-            datacenters[2] = datacenter;
+            //datacenters[2] = datacenter;
+            datacenters.emplace(2, std::move(dc));
         }
 
         if (datacenters.find(3) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 3);
+            auto dc = std::make_unique<Datacenter>(instanceNum, 3);
+            datacenter = dc.get();
+            //datacenter = new Datacenter(instanceNum, 3);
             datacenter->addAddressAndPort("149.154.175.100", 443, 0, "");
             datacenter->addAddressAndPort("2001:b28:f23d:f003:0000:0000:0000:000a", 443, 1, "");
-            datacenters[3] = datacenter;
+            //datacenters[3] = datacenter;
+            datacenters.emplace(3, std::move(dc));
         }
 
         if (datacenters.find(4) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 4);
+            auto dc = std::make_unique<Datacenter>(instanceNum, 4);
+            datacenter = dc.get();
+            //datacenter = new Datacenter(instanceNum, 4);
             datacenter->addAddressAndPort("149.154.167.91", 443, 0, "");
             datacenter->addAddressAndPort("2001:67c:4e8:f004:0000:0000:0000:000a", 443, 1, "");
-            datacenters[4] = datacenter;
+            //datacenters[4] = datacenter;
+            datacenters.emplace(4, std::move(dc));
         }
 
         if (datacenters.find(5) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 5);
+            auto dc = std::make_unique<Datacenter>(instanceNum, 5);
+            datacenter = dc.get();
+            //datacenter = new Datacenter(instanceNum, 5);
             datacenter->addAddressAndPort("149.154.171.5", 443, 0, "");
             datacenter->addAddressAndPort("2001:b28:f23f:f005:0000:0000:0000:000a", 443, 1, "");
-            datacenters[5] = datacenter;
+            //datacenters[5] = datacenter;
+            datacenters.emplace(5, std::move(dc));
         }
     } else {
         if (datacenters.find(1) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 1);
+            auto dc = std::make_unique<Datacenter>(instanceNum, 1);
+            datacenter = dc.get();
+            //datacenter = new Datacenter(instanceNum, 1);
             datacenter->addAddressAndPort("149.154.175.40", 443, 0, "");
             datacenter->addAddressAndPort("2001:b28:f23d:f001:0000:0000:0000:000e", 443, 1, "");
-            datacenters[1] = datacenter;
+            //datacenters[1] = datacenter;
+            datacenters.emplace(1, std::move(dc));
         }
 
         if (datacenters.find(2) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 2);
+            auto dc = std::make_unique<Datacenter>(instanceNum, 2);
+            datacenter = dc.get();
+            //datacenter = new Datacenter(instanceNum, 2);
             datacenter->addAddressAndPort("149.154.167.40", 443, 0, "");
             datacenter->addAddressAndPort("2001:67c:4e8:f002:0000:0000:0000:000e", 443, 1, "");
-            datacenters[2] = datacenter;
+            //datacenters[2] = datacenter;
+            datacenters.emplace(2, std::move(dc));
         }
 
         if (datacenters.find(3) == datacenters.end()) {
-            datacenter = new Datacenter(instanceNum, 3);
+            auto dc = std::make_unique<Datacenter>(instanceNum, 3);
+            datacenter = dc.get();
+            //datacenter = new Datacenter(instanceNum, 3);
             datacenter->addAddressAndPort("149.154.175.117", 443, 0, "");
             datacenter->addAddressAndPort("2001:b28:f23d:f003:0000:0000:0000:000e", 443, 1, "");
-            datacenters[3] = datacenter;
+            //datacenters[3] = datacenter;
+            datacenters.emplace(3, std::move(dc));
         }
     }
 }
@@ -2719,7 +2787,7 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
             if (requestStartTime != 0 && abs(currentTime - requestStartTime) >= timeout) {
                 std::vector<uint32_t> allDc;
                 for (auto & datacenter : datacenters) {
-                    if (datacenter.first == datacenterId || datacenter.second->isCdnDatacenter) {
+                    if (datacenter.first == datacenterId || datacenter.second.get()->isCdnDatacenter) {
                         continue;
                     }
                     allDc.push_back(datacenter.first);
@@ -2925,7 +2993,7 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
     }
 
     for (auto & iter : datacenters) {
-        Datacenter *datacenter = iter.second;
+        Datacenter *datacenter = iter.second.get();
         auto iter2 = genericMessagesToDatacenters.find(datacenter->getDatacenterId());
         if (iter2 == genericMessagesToDatacenters.end()) {
             Connection *connection = datacenter->getGenericConnection(false, 1);
@@ -3071,10 +3139,11 @@ void ConnectionsManager::processRequestQueue(uint32_t connectionTypes, uint32_t 
 
 Datacenter *ConnectionsManager::getDatacenterWithId(uint32_t datacenterId) {
     if (datacenterId == DEFAULT_DATACENTER_ID) {
-        return datacenters[currentDatacenterId];
+        //return datacenters[currentDatacenterId];
+        return datacenters.at(currentDatacenterId).get();
     }
     auto iter = datacenters.find(datacenterId);
-    return iter != datacenters.end() ? iter->second : nullptr;
+    return iter != datacenters.end() ? iter->second.get() : nullptr;
 }
 
 std::unique_ptr<TLObject> ConnectionsManager::wrapInLayer(TLObject *object, Datacenter *datacenter, Request *baseRequest) {
@@ -3306,7 +3375,7 @@ void ConnectionsManager::updateDcSettings(uint32_t dcNum, bool workaround, bool 
             updatingDcSettings = false;
             updatingDcSettingsAgain = false;
             for (auto & datacenter : datacenters) {
-                datacenter.second->resetInitVersion();
+                datacenter.second.get()->resetInitVersion();
             }
             updateDcSettings(0, false, false);
             return;
@@ -3388,8 +3457,11 @@ void ConnectionsManager::updateDcSettings(uint32_t dcNum, bool workaround, bool 
                     Datacenter *datacenter = getDatacenterWithId(iter.first);
                     DatacenterInfo *info = iter.second.get();
                     if (datacenter == nullptr) {
-                        datacenter = new Datacenter(instanceNum, iter.first);
-                        datacenters[iter.first] = datacenter;
+//                        datacenter = new Datacenter(instanceNum, iter.first);
+//                        datacenters[iter.first] = datacenter;
+                        auto dc = std::make_unique<Datacenter>(instanceNum, iter.first);
+                        datacenter = dc.get();
+                        datacenters.emplace(iter.first, std::move(dc));
                     }
                     datacenter->replaceAddresses(info->addressesIpv4, info->isCdn ? 8 : 0);
                     datacenter->replaceAddresses(info->addressesIpv6, info->isCdn ? 9 : 1);
@@ -3604,7 +3676,7 @@ void ConnectionsManager::applyDnsConfig(NativeByteBuffer *buffer, std::string ph
 }
 
 void ConnectionsManager::init(uint32_t version, int32_t layer, int32_t apiId, std::string deviceModel, std::string systemVersion, std::string appVersion, std::string langCode, std::string systemLangCode, std::string configPath, std::string logPath, std::string regId, std::string cFingerpting, std::string installerId, std::string packageId, int32_t timezoneOffset, int64_t userId, bool userPremium, bool isPaused, bool enablePushConnection, bool hasNetwork, int32_t networkType, int32_t performanceClass) {
-    currentVersion = version;
+    currentVersion = version;// TODO current app version 56639 {11.7.0(56639)}  App build.gradle calculate it -> output.versionCodeOverride
     currentLayer = layer;
     currentApiId = apiId;
     currentConfigPath = configPath;
@@ -3635,6 +3707,7 @@ void ConnectionsManager::init(uint32_t version, int32_t layer, int32_t apiId, st
 
     if (!logPath.empty()) {
         LOGS_ENABLED = true;
+        LOG_LEVEL = 6;
         FileLog::getInstance().init(logPath);
     }
 
@@ -3644,7 +3717,7 @@ void ConnectionsManager::init(uint32_t version, int32_t layer, int32_t apiId, st
     if (systemLangCode.compare(lastInitSystemLangcode) != 0) {
         lastInitSystemLangcode = systemLangCode;
         for (auto & datacenter : datacenters) {
-            datacenter.second->resetInitVersion();
+            datacenter.second.get()->resetInitVersion();
         }
         needLoadConfig = true;
         saveConfig();
@@ -3656,6 +3729,7 @@ void ConnectionsManager::init(uint32_t version, int32_t layer, int32_t apiId, st
         }
     }
 
+    // TODO handle error  if (pthread_create(&tid, NULL, thread_func, &arg) != 0) { handle error return;}  int join_status = pthread_join(tid, &retval); if (join_status != 0) {fprintf(stderr, "Thread join failed: %s\n", strerror(join_status)); return 1;}
     pthread_create(&networkThread, nullptr, (ConnectionsManager::ThreadProc), this);
 
     if (needLoadConfig) {
@@ -3692,7 +3766,7 @@ void ConnectionsManager::setProxySettings(std::string address, uint16_t port, st
         }
         if (reconnect) {
             for (auto & datacenter : datacenters) {
-                datacenter.second->suspendConnections(true);
+                datacenter.second.get()->suspendConnections(true);
             }
             Datacenter *datacenter = getDatacenterWithId(DEFAULT_DATACENTER_ID);
             if (datacenter != nullptr && datacenter->isHandshakingAny()) {
@@ -3710,7 +3784,7 @@ void ConnectionsManager::setLangCode(std::string langCode) {
         }
         currentLangCode = langCode;
         for (auto & datacenter : datacenters) {
-            datacenter.second->resetInitVersion();
+            datacenter.second.get()->resetInitVersion();
         }
         saveConfig();
     });
@@ -3723,7 +3797,7 @@ void ConnectionsManager::setRegId(std::string regId) {
         }
         currentRegId = regId;
         for (auto & datacenter : datacenters) {
-            datacenter.second->resetInitVersion();
+            datacenter.second.get()->resetInitVersion();
         }
         updateDcSettings(0, false, true);
         saveConfig();
@@ -3737,7 +3811,7 @@ void ConnectionsManager::setSystemLangCode(std::string langCode) {
         }
         lastInitSystemLangcode = currentSystemLangCode = langCode;
         for (auto & datacenter : datacenters) {
-            datacenter.second->resetInitVersion();
+            datacenter.second.get()->resetInitVersion();
         }
         saveConfig();
         updateDcSettings(0, false, false);
@@ -3774,10 +3848,10 @@ void ConnectionsManager::resumeNetwork(bool partial) {
         }
         if (!networkPaused) {
             for (auto & datacenter : datacenters) {
-                if (datacenter.second->isHandshaking(false)) {
-                    datacenter.second->createGenericConnection()->connect();
-                } else if (datacenter.second->isHandshaking(true)) {
-                    datacenter.second->createGenericMediaConnection()->connect();
+                if (datacenter.second.get()->isHandshaking(false)) {
+                    datacenter.second.get()->createGenericConnection()->connect();
+                } else if (datacenter.second.get()->isHandshaking(true)) {
+                    datacenter.second.get()->createGenericMediaConnection()->connect();
                 }
             }
         }
@@ -3802,10 +3876,10 @@ void ConnectionsManager::setNetworkAvailable(bool value, int32_t type, bool slow
             connectionState = ConnectionStateWaitingForNetwork;
         } else {
             for (auto & datacenter : datacenters) {
-                if (datacenter.second->isHandshaking(false)) {
-                    datacenter.second->createGenericConnection()->connect();
-                } else if (datacenter.second->isHandshaking(true)) {
-                    datacenter.second->createGenericMediaConnection()->connect();
+                if (datacenter.second.get()->isHandshaking(false)) {
+                    datacenter.second.get()->createGenericConnection()->connect();
+                } else if (datacenter.second.get()->isHandshaking(true)) {
+                    datacenter.second.get()->createGenericMediaConnection()->connect();
                 }
             }
         }

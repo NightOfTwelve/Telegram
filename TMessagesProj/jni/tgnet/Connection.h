@@ -103,6 +103,8 @@ private:
     uint32_t receivedDataAmount = 0;
     uint32_t generation = 0;
 
+    ConnectionsManager *connMgr{nullptr};
+
     uint8_t temp[64];
 
     AES_KEY encryptKey;

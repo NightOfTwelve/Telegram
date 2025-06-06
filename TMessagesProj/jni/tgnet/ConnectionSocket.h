@@ -22,7 +22,7 @@ class ByteArray;
 class ConnectionSocket {
 
 public:
-    ConnectionSocket(int32_t instance);
+    ConnectionSocket(int32_t instance, ConnectionsManager *connMgr);
     virtual ~ConnectionSocket();
 
     void writeBuffer(uint8_t *data, uint32_t size);
@@ -79,6 +79,8 @@ private:
     ByteArray *tempBuffer = nullptr;
     size_t bytesRead = 0;
     int8_t tlsState = 0;
+
+    ConnectionsManager *connMgr{nullptr};
 
     uint8_t proxyAuthState;
 

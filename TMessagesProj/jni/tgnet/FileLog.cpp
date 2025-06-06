@@ -23,6 +23,7 @@ bool LOGS_ENABLED = false;
 #endif
 
 bool REF_LOGS_ENABLED = false;
+uint8_t LOG_LEVEL = 0;
 
 FileLog &FileLog::getInstance() {
     static FileLog instance;
@@ -45,6 +46,7 @@ void FileLog::fatal(const char *message, ...) {
     if (!LOGS_ENABLED) {
         return;
     }
+    if (LOG_LEVEL < 3) return;
     va_list argptr;
     va_start(argptr, message);
 
@@ -82,6 +84,7 @@ void FileLog::e(const char *message, ...) {
     if (!LOGS_ENABLED) {
         return;
     }
+    if (LOG_LEVEL < 4) return;
     va_list argptr;
     va_start(argptr, message);
     struct timeval time_now;
@@ -114,6 +117,7 @@ void FileLog::w(const char *message, ...) {
     if (!LOGS_ENABLED) {
         return;
     }
+    if (LOG_LEVEL < 5) return;
     va_list argptr;
     va_start(argptr, message);
     struct timeval time_now;
@@ -146,6 +150,7 @@ void FileLog::d(const char *message, ...) {
     if (!LOGS_ENABLED) {
         return;
     }
+    if (LOG_LEVEL < 6) return;
     va_list argptr;
     va_start(argptr, message);
 
